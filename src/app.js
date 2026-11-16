@@ -23,6 +23,7 @@ const IC = {
   circle: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r=".6"/>',
   arc: '<path d="M4 19A15 15 0 0 1 19 4"/><circle cx="4" cy="19" r="1.4"/><circle cx="19" cy="4" r="1.4"/>',
   slot: '<rect x="3" y="8" width="18" height="8" rx="4"/>',
+  project: '<path class="s" d="M3 21l4-8h14l-4 8z"/><path d="M3 21l4-8h14l-4 8z"/><path class="y" d="M8 4h9" stroke-width="2.4"/><path class="y" d="M8.500 17h8" stroke-width="2"/><path class="a" d="M9 6v9M16 6v9" stroke-dasharray="2 2"/>',
   constr: '<path d="M4 20L20 4" stroke-dasharray="3 3"/>',
   del: '<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v6M14 11v6"/>',
   hor: '<path d="M3 12h18"/><path d="M7 8v8M17 8v8" opacity=".5"/>',
@@ -359,7 +360,9 @@ function evalExpr(str) {
     if (s[i] === '(') { i++; const v = add(); ws(); if (s[i] !== ')') throw 0; i++; return v; }
     if (s[i] === '-') { i++; return -prim(); }
     const m = /^d\d+/i.exec(s.slice(i)); if (m) { i += m[0].length; const d = S.dims[m[0].toLowerCase()]; if (!d) throw 0; return d.v; }
-    const n = /^\d*\.?\d+/.exec(s.slice(i)); if (!n) throw 0; i += n[0].length; return parseFloat(n[0]);
+    const n = /^(\d+\.?\d*|\.\d+)/.exec(s.slice(i)); if (!n) throw 0; i += n[0].length; let v = parseFloat(n[0]);
+    const u = /^\s*(mm|cm|in(?![a-z])|")/i.exec(s.slice(i)); if (u) { i += u[0].length; const k = u[1].toLowerCase(); v *= k === 'mm' ? 1 / 25.4 : k === 'cm' ? 1 / 2.54 : 1; }   // units inside formulas: 5mm, 2 cm, 3in
+    return v;
   };
   const mul = () => { let v = prim(); for (;;) { ws(); if (s[i] === '*') { i++; v *= prim(); } else if (s[i] === '/') { i++; v /= prim(); } else return v; } };
   const add = () => { let v = mul(); for (;;) { ws(); if (s[i] === '+') { i++; v += mul(); } else if (s[i] === '-') { i++; v -= mul(); } else return v; } };
@@ -567,6 +570,7 @@ const HINTS = {
   'rect-center': 'Rectangle from center: tap the center, then a corner.',
   arc: 'Arc: tap the center, the start, then sweep to the end.',
   slot: 'Slot: tap one end center, the other end center, then set the width.',
+  project: 'Project: the dashed yellow lines are edges and holes of the part. Tap one to bring it into this sketch as reference geometry that follows the part. Tap Project again when done.',
   face: 'Face: tap inside the closed outline to turn it into sheet metal.',
   fillet: 'Fillet: tap a corner where two lines meet, then type the radius.',
   chamfer: 'Chamfer: tap a corner where two lines meet, then type the size.',
@@ -908,7 +912,7 @@ function deleteSel() {
   if (!sel.length) { toast('Select something to delete first'); return; }
   let n = 0, pj = 0;
   for (const s of sel) {
-    if (s.k === 'e' && S.ents[s.id]) { if (S.ents[s.id].proj) { pj++; continue; } delete S.ents[s.id]; n++; }
+    if (s.k === 'e' && S.ents[s.id]) { if (S.ents[s.id].proj && S.ents[s.id].proj[0] !== '@pg') { pj++; continue; } delete S.ents[s.id]; n++; }
     else if (s.k === 'd' && S.dims[s.id]) { delete S.dims[s.id]; n++; }
     else if (s.k === 'c' && S.cons[s.id]) { delete S.cons[s.id]; n++; }
     else if (s.k === 'pat' && S.pats[s.id]) { delete S.pats[s.id]; n++; }
@@ -1007,7 +1011,7 @@ function popVals() {
     const s = String(popState.vals[i]).replace(/−/g, '-');
     let v;
     if (f.kind !== 'int' && /d\d/i.test(s)) { const ev = evalExpr(s); v = ev == null ? NaN : ev; }
-    else v = (f.kind === 'len' || f.kind === 'slen') ? parseLen(s) : parseNum(s);
+    else { v = (f.kind === 'len' || f.kind === 'slen') ? parseLen(s) : parseNum(s); if (!isFinite(v) && f.kind !== 'int' && popState.spec.dimRef) { const ev = evalExpr(s); if (ev != null) v = ev; } }   // plain math: 1.5+.25, 25mm+1
     if (f.kind === 'int') v = Math.round(v);
     if (!isFinite(v) || (f.kind === 'len' && v <= 0) || (f.kind === 'int' && v < 1)) ok = false;
     out[f.key] = v;
@@ -1024,7 +1028,8 @@ function popKey(k) {
   else if (k === '−' || k === '-') s = popState.spec.dimRef ? s + '-' : (s.startsWith('−') ? s.slice(1) : '−' + s);
   else if (k === '×' || k === '*') s += '*';
   else if (k === '+' || k === '(' || k === ')') s += k;
-  else if (k === 'mm') s = s.replace(/mm$/, '') + 'mm';
+  else if (k === '/' && popState.spec.dimRef && /mm$/.test(s)) s += '/';
+  else if (k === 'mm') s = popState.spec.dimRef && /[-+*/()]/.test(s.replace(/^-/, '')) ? (/mm$/.test(s) ? s : /[\d.]$/.test(s) ? s + 'mm' : s) : s.replace(/mm$/, '') + 'mm';
   else s = s.replace(/mm$/, '') + k + (/mm$/.test(s) ? 'mm' : '');
   popState.vals[i] = s; popState.fresh = false; paintPop();
   if (popState.spec.onChange) { const v = popVals(); if (v) popState.spec.onChange(v); }
@@ -1069,6 +1074,7 @@ function showSelPop() {
   }
   const offer = dimOffer(), ents = sel.filter(s => s.k === 'e');
   const acts = [];
+  if (ents.length && ents.every(s => S.ents[s.id].proj && S.ents[s.id].proj[0] === '@pg')) acts.push({ label: 'Delete', cls: 'dg', fn: deleteSel });
   if (ents.some(s => !S.ents[s.id].proj)) { const allCon = ents.every(s => S.ents[s.id].con); acts.push({ label: 'Construction', cls: allCon ? 'on' : '', fn: toggleConstr }, { label: 'Delete', cls: 'dg', fn: deleteSel }); }
   if (!offer && !acts.length) { closePop(); return; }
   const n = sel.length;
@@ -1165,6 +1171,7 @@ function actDown(p, e) {
     if (tool.name === 'con') { act.con = hitTest(p.x, p.y) || null; return; }
     if (tool.name === 'face') { act.face = s2w(p.x, p.y); return; }
     if (tool.name === 'cut') { act.cut = s2w(p.x, p.y); return; }
+    if (tool.name === 'project') { act.pg = { x: p.x, y: p.y }; return; }
     if (tool.name === 'flange') { act.fl = s2w(p.x, p.y); return; }
     if (tool.name === 'fillet' || tool.name === 'chamfer') { act.cr = { x: p.x, y: p.y }; return; }
     cur = snap(p.x, p.y, refPt());
@@ -1176,7 +1183,7 @@ function actMove(p) {
   if (act.place) { if (dimPlace) { dimPlace.cur = s2w(p.x, p.y); dirty = true; } return; }
   const thr = lastPtrType === 'touch' ? 10 : 6;
   if (!act.moved && hyp(p.x - act.x0, p.y - act.y0) > thr) { act.moved = true; if (tool.name === 'select') beginDrag(p); }
-  if (act.face || act.cut || act.fl || act.cr || act.con !== undefined) return;
+  if (act.face || act.cut || act.pg || act.fl || act.cr || act.con !== undefined) return;
   if (tool.name !== 'select') { cur = snap(p.x, p.y, refPt()); if (tool.name === 'arc' && tool.step === 2) arcTrack(cur); dirty = true; return; }
   if (act.moved) doDrag(p);
 }
@@ -1186,6 +1193,7 @@ function actUp(p) {
   if (a.con !== undefined) { if (!a.moved) conTap(realHit(a.con)); return; }
   if (a.face) { if (!a.moved) facePick(a.face); return; }
   if (a.cut) { if (!a.moved) cutTap({ x: a.cut.x * skMir(S), y: a.cut.y }); return; }
+  if (a.pg) { if (!a.moved) projectTap(a.pg.x, a.pg.y); return; }
   if (a.fl) { if (!a.moved) flangeTap(a.fl, 14 / view.s); return; }
   if (a.cr) { if (!a.moved) cornerTap(a.cr.x, a.cr.y); return; }
   if (tool.name !== 'select') {
@@ -1272,7 +1280,7 @@ document.addEventListener('keydown', e => {
   if (e.target && (e.target.tagName === 'INPUT')) return;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
-  if (popState && popState.spec.fields.length && (/^[0-9./ \-m]$/.test(e.key) || e.key === 'Backspace' || e.key === 'Enter')) { e.preventDefault(); if (e.key === 'm') popKey('mm'); else popKey(e.key); return; }
+  if (popState && popState.spec.fields.length && (/^[0-9./ \-m+*()]$/.test(e.key) || e.key === 'Backspace' || e.key === 'Enter')) { e.preventDefault(); if (e.key === 'm') popKey('mm'); else popKey(e.key); return; }
   if (e.key === 'Escape') escAll();
   else if (e.key === 'Delete' || e.key === 'Backspace') { if (sel.length) deleteSel(); }
 });
@@ -1404,10 +1412,12 @@ function render() {
   const patSrc = new Set(); for (const s of sel) if (s.k === 'pat' && S.pats[s.id]) S.pats[s.id].src.forEach(e => patSrc.add(e));
   for (const id in S.ents) {
     const e = S.ents[id], on = isSel('e', id) || patSrc.has(id), hv = hover && hover.k === 'e' && hover.id === id;
-    ctx.strokeStyle = on ? C.sel : e.proj ? C.proj : e.con ? C.con : C.geo; ctx.lineWidth = on || hv ? 3 : e.proj ? 1.7 : e.con ? 1.3 : 2.1; ctx.setLineDash(e.con && !e.proj ? [7, 5] : []);
+    ctx.strokeStyle = on ? C.sel : e.lost ? C.fix : e.proj ? C.proj : e.con ? C.con : C.geo; ctx.lineWidth = on || hv ? 3 : e.proj ? 1.7 : e.con ? 1.3 : 2.1; ctx.setLineDash(e.con && !e.proj ? [7, 5] : []);
     strokeG(entG(e));
   }
   ctx.setLineDash([]);
+  if (tool.name === 'project') { const hv = ptr && !act && lastPtrType !== 'touch' ? projNear(ptr.x, ptr.y) : null; ctx.strokeStyle = C.proj;
+    for (const c of projCands()) { const h = hv && hv.key === c.key; ctx.globalAlpha = h ? 1 : 0.62; ctx.lineWidth = h ? 3.4 : 2; ctx.setLineDash(h ? [] : [6, 4]); strokeG(c.g); } ctx.globalAlpha = 1; ctx.setLineDash([]); }
   // points
   for (const id in S.pts) {
     const p = S.pts[id], [x, y] = w2s(p.x, p.y), on = isSel('p', id), hv = hover && hover.k === 'p' && hover.id === id;
@@ -1511,7 +1521,7 @@ function loop() {
 
 // ---------------------------------------------------------------- chrome: ribbon, browser, status
 const RIBBON = [
-  ['Create', [['line', 'Line'], ['poly', 'Polyline'], ['rect', 'Rectangle'], ['circle', 'Circle'], ['arc', 'Arc'], ['slot', 'Slot']]],
+  ['Create', [['line', 'Line'], ['poly', 'Polyline'], ['rect', 'Rectangle'], ['circle', 'Circle'], ['arc', 'Arc'], ['slot', 'Slot'], ['project', 'Project']]],
   ['Modify', [['select', 'Dimension'], ['fillet', 'Fillet'], ['chamfer', 'Chamfer'], ['constr', 'Construct'], ['del', 'Delete']]],
   ['Constrain', [['hor', 'Horizontal'], ['ver', 'Vertical'], ['par', 'Parallel'], ['perp', 'Perpendicular'], ['tan', 'Tangent'], ['eq', 'Equal'], ['coi', 'Coincident'], ['conc', 'Concentric'], ['sym', 'Symmetric'], ['mid', 'Midpoint'], ['fix', 'Fix / lock']], true],
   ['Pattern', [['pcirc', 'Circular'], ['prect', 'Rectangular']]],
@@ -1536,6 +1546,7 @@ function ribbonClick(k) {
   else if (k === 'del') deleteSel();
   else if (k === 'pcirc') startPattern('circ');
   else if (k === 'prect') startPattern('rect');
+  else if (k === 'project') projectButton();
   else if (k === 'dxf') exportDialog('sketch');
   else if (k === 'flat') flatButton();
   else if (k === 'flatdxf') exportDialog('flat');

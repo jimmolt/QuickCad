@@ -1,0 +1,32 @@
+// thickness arrow on the selected plate face (steps through gauges); ribbon still fits iPad widths with the Project button
+import { createRequire } from 'node:module';
+const require = createRequire('/opt/npm-tools/node_modules/');
+const { chromium } = require('playwright');
+const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox', '--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+const errs = []; page.on('pageerror', e => errs.push('PAGEERR ' + e.message));
+await page.goto('file:///home/claude/qc/dist/index.html'); await page.waitForFunction(() => window.QC && QC.solver === 'ok');
+const box = await page.locator('#cv').boundingBox();
+const W = async (x, y) => { const [sx, sy] = await page.evaluate(([x, y]) => QC.w2s(x, y), [x, y]); return [box.x + sx, box.y + sy]; };
+const drag = async (x1, y1, x2, y2) => { const a = await W(x1, y1), b = await W(x2, y2); await page.mouse.move(...a); await page.mouse.down(); await page.mouse.move(...b, { steps: 6 }); await page.mouse.up(); };
+const tap = async (x, y) => { const a = await W(x, y); await page.mouse.move(...a); await page.mouse.down(); await page.mouse.up(); await page.waitForTimeout(120); };
+const rb = t => page.click(`#ribbon [data-k="${t}"]`);
+const ok = (c, m) => console.log((c ? 'PASS ' : 'FAIL ') + m);
+for (const [w, h] of [[1024, 768], [834, 1112], [1180, 820]]) { await page.setViewportSize({ width: w, height: h }); await page.waitForTimeout(200);
+  const r = await page.evaluate(() => { const R = document.querySelector('#ribbon'); return [R.scrollWidth, R.clientWidth, R.className, !!R.querySelector('[data-k="project"]')]; });
+  ok(r[0] <= r[1] + 1 && r[3], 'ribbon fits at ' + w + ' wide ' + JSON.stringify(r)); if (w === 834) await page.screenshot({ path: 'ui834p.png', clip: { x: 0, y: 0, width: 834, height: 180 } }); }
+await rb('rect'); await drag(0, 0, 6, 3.5);
+await page.click('.tab[data-tab="sm"]'); await rb('face'); await tap(2, 1.5); await page.click('.tgrid button:has-text("16ga")'); await page.waitForTimeout(300);
+ok(await page.evaluate(() => QC.G3.handles.length) === 0, 'no arrow until a face is selected');
+await page.evaluate(() => QC.setSelFace('top')); await page.waitForTimeout(250);
+const hp = () => page.evaluate(() => { const h = QC.G3.handles[0]; if (!h) return null; const r = document.querySelector('#gl').getBoundingClientRect(), pr = p => { const v = new THREE.Vector3(...p).project(QC.G3.cam); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }; return [...pr(h.grab), ...pr([h.grab[0] + h.d[0] * QC.G3.span * 0.03, h.grab[1] + h.d[1] * QC.G3.span * 0.03, h.grab[2] + h.d[2] * QC.G3.span * 0.03])]; });
+let q = await hp(); ok(!!q, 'thickness arrow shown on the selected top face'); await page.screenshot({ path: 'th1.png' });
+const hi0 = await page.evaluate(() => QC.hi), ux = q[2] - q[0], uy = q[3] - q[1];
+await page.mouse.move(q[0], q[1]); await page.mouse.down(); await page.mouse.move(q[0] + ux * 1.1, q[1] + uy * 1.1, { steps: 4 }); await page.mouse.move(q[0] + ux * 2.1, q[1] + uy * 2.1, { steps: 4 }); await page.mouse.up(); await page.waitForTimeout(250);
+const t1 = await page.evaluate(() => [QC.part.t, QC.part.tl, QC.hi]);
+ok(Math.abs(t1[0] - 0.1046) < 1e-9 && t1[2] === hi0 + 1, 'two steps up from 16ga -> ' + JSON.stringify(t1) + ' (one undo step)');
+q = await hp(); await page.mouse.move(q[0], q[1]); await page.mouse.down(); await page.mouse.move(q[0] - ux * 1.1, q[1] - uy * 1.1, { steps: 5 }); await page.mouse.up(); await page.waitForTimeout(250);
+ok(Math.abs(await page.evaluate(() => QC.part.t) - 0.0747) < 1e-9, 'one step down -> ' + await page.evaluate(() => QC.part.tl));
+await page.click('#undoBtn'); await page.click('#undoBtn'); await page.waitForTimeout(200);
+ok(Math.abs(await page.evaluate(() => QC.part.t) - 0.0598) < 1e-9, 'undo twice -> back to 16ga');
+console.log(errs.join('\n') || 'no page errors'); await browser.close();

@@ -569,7 +569,7 @@ function syncProj(srcFeat) {       // operates on S
   for (const id in S.pts) { const p = S.pts[id]; if (!p.proj) continue; const q = p.proj[0] === srcFeat.id && src.pts[p.proj[1]]; if (q) { p.x = q.x * mx; p.y = q.y; pmap[p.proj[1]] = id; } }
   pmap.p0 = 'p0';
   for (const id in S.ents) {
-    const e = S.ents[id]; if (!e.proj) continue; const q = e.proj[0] === srcFeat.id && src.ents[e.proj[1]];
+    const e = S.ents[id]; if (!e.proj || e.proj[0][0] === '@') continue; const q = e.proj[0] === srcFeat.id && src.ents[e.proj[1]];
     if (!q || q.con) { delete S.ents[id]; continue; }
     if (e.t === 'circle') e.r = q.r; have.add(e.proj[1]);
   }
@@ -598,6 +598,7 @@ function regen() {
   for (const f of part.feats) { if (f.type !== 'sketch' || !skFl(f)) continue; const rec = model && model.flanges && model.flanges.find(x => x.f.id === f.plane.fl); if (!rec) continue;
     withSketch(f.sk, () => { syncFlProj(rec.W, rec.c.Lf); solve(); if (f.id === actId) lastNid = S.nid; }); if (f.id === actId) { lastNid = S.nid; } again = true; }
   if (again) buildModel();
+  regenPG();
   dirty3 = true; G3.rebuild = true;
 }
 
@@ -607,7 +608,7 @@ function activate(id) { finishPoly(); closePop(); sel = []; actId = id; S = feat
 function setMode(m) {
   finishPoly(); closePop(); sel = [];
   if (m === 'model') { init3D(); if (!G3.ok) { toast('3D view is not available in this browser — the flat pattern still works'); } }
-  mode = m; ribTab = m === 'model' || m === 'flat' ? 'sm' : 'sketch'; if (m === 'sketch' && tool.name === 'face') tool = { name: 'select', step: 0 };
+  mode = m; ribTab = m === 'model' || m === 'flat' ? 'sm' : 'sketch'; if ((m === 'sketch' && tool.name === 'face') || (m !== 'sketch' && tool.name === 'project')) tool = { name: 'select', step: 0 };
   $('#stage').classList.toggle('model', m === 'model'); $('#stage').classList.toggle('flat', m === 'flat');
   buildRibbon(); resize(); if (m === 'sketch') fit(); if (m === 'flat') fitFlat(); dirty3 = true; refresh(); updateInfo();
 }
@@ -785,7 +786,9 @@ function handleValue(h, px, py) {         // raw value under the pointer: distan
   let a = Math.atan2((h.down ? -1 : 1) * dot3(p, h.n), dot3(p, h.u)) * 180 / PI; if (a < 0) a = a < -90 ? 180 : 0; return a; }
 function handleStart(h, px, py) { const s0 = handleValue(h, px, py); return s0 == null ? null : { h, s0, v0: h.get(), last: h.get() }; }
 function handleDrag(st, px, py) { const s = handleValue(st.h, px, py); if (s == null) return; const h = st.h;
-  let v = h.type === 'lin' ? st.v0 + (s - st.s0) : s; v = Math.round(v / h.snap) * h.snap; v = h.type === 'lin' ? Math.max(h.min, +v.toFixed(5)) : Math.max(5, Math.min(175, v));
+  let v = h.type === 'lin' ? st.v0 + (s - st.s0) : s;
+  if (h.steps) { let i0 = 0; h.steps.forEach((q, i) => { if (Math.abs(q - st.v0) < Math.abs(h.steps[i0] - st.v0)) i0 = i; }); v = h.steps[Math.max(0, Math.min(h.steps.length - 1, i0 + Math.round((s - st.s0) / (st.stepLen || (st.stepLen = G3.span * 0.03)))))]; }   // stepped handle (sheet gauges): each bit of drag moves one step
+  else { v = Math.round(v / h.snap) * h.snap; v = h.type === 'lin' ? Math.max(h.min, +v.toFixed(5)) : Math.max(5, Math.min(175, v)); }
   if (Math.abs(v - st.last) < 1e-9) return; st.last = h.set(v); buildModel(); G3.rebuild = true; dirty3 = true; updateInfo();
   const inp = document.querySelectorAll('#flpanel input')[h.inp]; if (inp) inp.value = fmt(st.last); }
 function handleEnd(st) { if (Math.abs(st.last - st.v0) > 1e-9) commitPart(); st.h.done(); }
@@ -848,7 +851,103 @@ function rebuild3D() {
       G3.handles.push({ type: 'lin', P, d, grab: arrow(P, d, 0x3b5bff), snap: 1 / 32, min: 1 / 32, inp: 0, get: () => af.size, set: v => (af.size = v), done: () => cornerPanel(af) }); } }
   else if (af && af.type === 'contour' && model.contour) { const b = model.contour.bb, P = [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, model.contour.len], d = [0, 0, 1];
     G3.handles.push({ type: 'lin', P, d, grab: arrow(P, d, 0x3b5bff), snap: 1 / 16, min: 1 / 16, inp: 0, get: () => af.len, set: v => (af.len = v), done: () => contourPanel(af) }); }
+  // thickness arrow: shown on the selected plate face; dragging steps through the gauge and plate sizes
+  if (!af && (selFace === 'top' || selFace === 'bot') && model.outer && !model.contour && !cutSel && !flPick && !crPick) { const b = model.outer.bb, up = selFace === 'top', P = [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, up ? part.t : 0], d = [0, 0, up ? 1 : -1];
+    const list = [...GAUGES.map(([g, v]) => [v, g + 'ga (' + fmt(v) + ')']), ...FRACS.map(([n, v]) => [v, n + ' (' + fmt(v) + ')'])].sort((a, c) => a[0] - c[0]);
+    G3.handles.push({ type: 'lin', P, d, grab: arrow(P, d, 0x3b5bff), steps: list.map(q => q[0]), inp: 99, get: () => part.t, set: v => { part.t = v; part.tl = (list.find(q => q[0] === v) || [0, fmt(v) + ' in'])[1]; toast('Thickness ' + part.tl); return v; }, done: () => {} }); }
   G3.scene.background = new T.Color(light ? 0xeef1f4 : 0x14181d);
+}
+// ---------------------------------------------------------------- project geometry
+// Every 3D edge of the part (both faces of the plate and of each flange leg, and the holes in them) gets a stable key. The Project tool drops an edge
+// onto the active sketch plane as fixed yellow reference geometry tagged proj:['@pg', key]; regen re-projects it so it follows the part.
+function projCatalog() {
+  const out = []; if (!(model && model.outer) || model.contour) return out; const t = part.t;
+  const add = (g, key, map, n) => { for (const h of [1, 0]) { const k = key + (h ? 't' : 'b');
+    if (g.t === 'line') { out.push({ key: k, t: 'line', A: map(g.x1, g.y1, h), B: map(g.x2, g.y2, h) }); continue; }
+    if (!(g.r > 1e-6)) continue; const o = { key: k, t: g.t, C: map(g.cx, g.cy, h), r: g.r, n };
+    if (g.t === 'arc') { const m = (g.sa + g.ea) / 2, at = a => map(g.cx + g.r * Math.cos(a), g.cy + g.r * Math.sin(a), h); o.A = at(g.sa); o.B = at(g.ea); o.M = at(m); }
+    out.push(o); } };
+  const bm = (x, y, h) => [x, y, h ? t : 0];
+  model.outer.segs.forEach((g, i) => add(g, 'o' + i, bm, [0, 0, 1]));
+  model.holes.forEach((hl, j) => hl.segs.forEach((g, i) => add(g, 'h' + j + '.' + i, bm, [0, 0, 1])));
+  for (const fl of model.flanges || []) { const T = fl.tip, W = fl.W, L = fl.c.Lf, fm = (x, y, h) => { const p = v3(v3(T.leg0, 1, T.v, x), 1, T.u, y); return h ? v3(p, 1, T.n, t) : p; };
+    [[0, 0, W, 0], [W, 0, W, L], [W, L, 0, L], [0, L, 0, 0]].forEach((q, i) => add({ t: 'line', x1: q[0], y1: q[1], x2: q[2], y2: q[3] }, 'F' + fl.f.id + '.e' + i, fm, T.n));
+    (fl.holes || []).forEach((hl, j) => hl.segs.forEach((g, i) => add(g, 'F' + fl.f.id + '.h' + j + '.' + i, fm, T.n))); }
+  return out;
+}
+function projItem(it, fr) {       // catalog item -> 2D geometry on the sketch plane (null when it cannot be shown there)
+  const p2 = q => { const d = [q[0] - fr.O[0], q[1] - fr.O[1], q[2] - fr.O[2]]; return [dot3(d, fr.ex), dot3(d, fr.ey)]; };
+  if (it.t === 'line') { const a = p2(it.A), b = p2(it.B); return hyp(a[0] - b[0], a[1] - b[1]) < 1e-5 ? null : { t: 'line', x1: a[0], y1: a[1], x2: b[0], y2: b[1] }; }
+  const dn = dot3(it.n, fr.n), c = p2(it.C);
+  if (Math.abs(dn) > 0.99999) {                    // parallel faces: true shape
+    if (it.t === 'circle') return { t: 'circle', cx: c[0], cy: c[1], r: it.r };
+    let a = p2(it.A), b = p2(it.B); const m = p2(it.M); if ((a[0] - c[0]) * (m[1] - c[1]) - (a[1] - c[1]) * (m[0] - c[0]) < 0) [a, b] = [b, a];
+    const sa = Math.atan2(a[1] - c[1], a[0] - c[0]); let ea = Math.atan2(b[1] - c[1], b[0] - c[0]); while (ea <= sa + 1e-9) ea += TAU;
+    return { t: 'arc', cx: c[0], cy: c[1], r: it.r, sa, ea };
+  }
+  if (it.t === 'circle' && Math.abs(dn) < 1e-4) {  // hole seen edge-on: a line as long as its diameter
+    const d = cross3(it.n, fr.n), L = hyp(d[0], d[1], d[2]) || 1, a = p2(v3(it.C, 1, d, -it.r / L)), b = p2(v3(it.C, 1, d, it.r / L)); return { t: 'line', x1: a[0], y1: a[1], x2: b[0], y2: b[1] };
+  }
+  return null;
+}
+function gSig(g) {
+  const r = v => Math.round(v * 1e4), pt = (x, y) => r(x) + ',' + r(y);
+  if (g.t === 'line') { const a = pt(g.x1, g.y1), b = pt(g.x2, g.y2); return a < b ? 'l' + a + '|' + b : 'l' + b + '|' + a; }
+  if (g.t === 'circle') return 'c' + pt(g.cx, g.cy) + '|' + r(g.r);
+  return 'a' + pt(g.cx, g.cy) + '|' + pt(g.cx + g.r * Math.cos(g.sa), g.cy + g.r * Math.sin(g.sa)) + '|' + pt(g.cx + g.r * Math.cos(g.ea), g.cy + g.r * Math.sin(g.ea));
+}
+const projOk = () => { const face = faceFeat(); return !!(model && model.outer && !model.contour && face && face.sk !== actId && planeFrame(feat(actId))); };
+function projCands() {            // what the Project tool can still bring into the active sketch
+  if (!projOk()) return []; const fr = planeFrame(feat(actId)), seen = new Set(), out = [];
+  for (const id in S.ents) seen.add(gSig(entG(S.ents[id])));
+  for (const it of projCatalog()) { const g = projItem(it, fr); if (!g) continue; const s = gSig(g); if (seen.has(s)) continue; seen.add(s); out.push({ key: it.key, g }); }
+  return out;
+}
+function projAdd(c) {             // operates on S
+  const g = c.g, mk = (x, y, role) => { const id = nid('p'); S.pts[id] = { x, y, fixed: true, proj: ['@pg', c.key, role] }; return id; }, o = { t: g.t, con: true, proj: ['@pg', c.key] };
+  if (g.t === 'line') { o.a = mk(g.x1, g.y1, 0); o.b = mk(g.x2, g.y2, 1); }
+  else { o.c = mk(g.cx, g.cy, 2); if (g.t === 'circle') o.r = g.r; else { o.a = mk(g.cx + g.r * Math.cos(g.sa), g.cy + g.r * Math.sin(g.sa), 0); o.b = mk(g.cx + g.r * Math.cos(g.ea), g.cy + g.r * Math.sin(g.ea), 1); } }
+  const id = nid('e'); S.ents[id] = o; return id;
+}
+function syncPG(fr) {             // operates on S: move projected geometry to where the part is now; true when anything changed
+  let map = null, ch = false;
+  for (const id in S.ents) { const e = S.ents[id]; if (!e.proj || e.proj[0] !== '@pg') continue;
+    if (!map) { map = {}; for (const it of projCatalog()) map[it.key] = it; }
+    const it = map[e.proj[1]], g = it && projItem(it, fr);
+    if (!g || g.t !== e.t) { if (!e.lost) { e.lost = true; ch = true; } continue; }
+    if (e.lost) { delete e.lost; ch = true; }
+    const set = (pid, x, y) => { const p = S.pts[pid]; if (p && (Math.abs(p.x - x) > 1e-9 || Math.abs(p.y - y) > 1e-9)) { p.x = x; p.y = y; ch = true; } };
+    if (g.t === 'line') { set(e.a, g.x1, g.y1); set(e.b, g.x2, g.y2); }
+    else { set(e.c, g.cx, g.cy); if (g.t === 'circle') { if (Math.abs(e.r - g.r) > 1e-9) { e.r = g.r; ch = true; } } else { set(e.a, g.cx + g.r * Math.cos(g.sa), g.cy + g.r * Math.sin(g.sa)); set(e.b, g.cx + g.r * Math.cos(g.ea), g.cy + g.r * Math.sin(g.ea)); } }
+  }
+  return ch;
+}
+const hasPG = sk => { for (const id in sk.ents) { const e = sk.ents[id]; if (e.proj && e.proj[0] === '@pg') return true; } return false; };
+function regenPG() {              // after the model is built: re-project, re-solve the sketches that moved, rebuild (a few rounds cover chains)
+  const face = faceFeat(); let actCh = false;
+  for (let pass = 0; pass < 3; pass++) { let ch = false;
+    for (const f of part.feats) { if (f.type !== 'sketch' || (face && f.id === face.sk) || !hasPG(f.sk)) continue; const fr = planeFrame(f); if (!fr) continue;
+      withSketch(f.sk, () => { if (syncPG(fr)) { solve(); ch = true; if (f.id === actId) actCh = true; } }); }
+    if (!ch) break; buildModel(); }
+  if (actCh) solve();
+  if (model && model.warn) for (const f of part.feats) if (f.type === 'sketch' && Object.values(f.sk.ents).some(e => e.lost)) model.warn.push(f.name + ': a projected edge lost the part edge it came from — it stays where it was (delete it and project again)');
+}
+function projectButton() {
+  if (tool.name === 'project') { setTool('select'); return; }
+  const face = faceFeat();
+  if (!(model && model.outer) || model.contour) { toast('Project needs a sheet metal part — make a Face first, then sketch on one of its faces'); return; }
+  if (face && face.sk === actId) { toast('This sketch is the outline of the part itself — Project works in a sketch made on a face (New Sketch)'); return; }
+  if (!planeFrame(feat(actId))) { toast('The face this sketch sits on is missing'); return; }
+  setTool('project'); if (!projCands().length) toast('Everything that can be projected onto this face is already here');
+}
+function projNear(sx, sy) {
+  const w = s2w(sx, sy), tol = (lastPtrType === 'touch' ? 22 : 14) / view.s; let best = null;
+  for (const c of projCands()) { const d = distG(c.g, w.x, w.y); if (d < tol && (!best || d < best.d)) best = { c, d }; }
+  return best && best.c;
+}
+function projectTap(sx, sy) {
+  const c = projNear(sx, sy); if (!c) { toast('Tap a dashed yellow edge or hole of the part to project it'); return; }
+  projAdd(c); if (commit()) toast((c.g.t === 'line' ? 'Edge' : c.g.t === 'circle' ? 'Hole' : 'Arc') + ' projected — it follows the part. Dimension or constrain to it like any line.');
 }
 // ---- world frame of a sketch feature's plane: origin, x/y directions, outward normal (toward whoever views that sketch)
 function planeFrame(f) {
@@ -982,6 +1081,6 @@ function dbxSettings() {
   initSolver().then(() => { regen(); if (model && model.outer) setMode('model'); refresh(); updateInfo(); });
   dbxFinish();
 })();
-window.QC = { popKey, undo, redo, get popState() { return popState; }, get hi() { return hi; }, get labelRects() { return labelRects; }, get tool() { return tool; }, toolVar, get cur() { return cur; }, get S() { return S; }, get part() { return part; }, get model() { return model; }, get mode() { return mode; }, get G3() { return G3; }, get sel() { return sel; }, set sel(v) { sel = v; }, get dof() { return dof; }, get view() { return view; }, get solver() { return solverState; },
+window.QC = { projCands, projCatalog, popKey, undo, redo, get popState() { return popState; }, get hi() { return hi; }, get labelRects() { return labelRects; }, get tool() { return tool; }, toolVar, get cur() { return cur; }, get S() { return S; }, get part() { return part; }, get model() { return model; }, get mode() { return mode; }, get G3() { return G3; }, get sel() { return sel; }, set sel(v) { sel = v; }, get dof() { return dof; }, get view() { return view; }, get solver() { return solverState; },
   setTool, toolClick, commit, applyCon, applyDim, dimOffer, dxfText, flatGeoms, zipOne, parseLen, fit, undo, redo, loadSketch, loadPart, newPart, newSketch, startPattern, w2s, popKey, showSelPop, solve,
   facePick, faceButton, newSketchOnFace, cornerButton, cornerHit, regions, cutRegions, hit3, handleAt, handleStart, handleDrag, handleEnd, facePick3, setSelFace,  cornerVerts, contourButton, contourCalc, openChain, pickFlangeEdge3, edgeCorners, flatButton, flangeButton, flangeTap, flangePanel, flangeCalc, makeCut, cutTap, cancelCut, cutCands, sketchLoops, cutState: () => cutSel, setMode, activate, findLoops, regen };
