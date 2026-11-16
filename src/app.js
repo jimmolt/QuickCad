@@ -1784,6 +1784,7 @@ $('#fileIn').onchange = async e => {
 $('#pname').addEventListener('change', e => { part.name = e.target.value.trim() || 'Part1'; e.target.value = part.name; pushHist(); refresh(); });
 $('#pname').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
 document.querySelectorAll('.tab[data-soon]').forEach(t => t.onclick = () => toast(t.dataset.soon));
+document.querySelectorAll('.tab[data-model]').forEach(t => t.onclick = () => { if (model && model.outer && !model.contour) setMode('model'); else toast('Make a Face first — then 3D Model shows the part'); });
 document.querySelectorAll('.tab[data-tab]').forEach(t => t.onclick = () => { if (t.dataset.tab === 'sketch' && mode === 'model') { setMode('sketch'); return; } finishPoly(); ribTab = t.dataset.tab; buildRibbon(); refresh(); });
 window.addEventListener('resize', resize);
 if (window.ResizeObserver) new ResizeObserver(resize).observe($('#stage'));
