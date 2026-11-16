@@ -23,6 +23,8 @@ const IC = {
   circle: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r=".6"/>',
   arc: '<path d="M4 19A15 15 0 0 1 19 4"/><circle cx="4" cy="19" r="1.4"/><circle cx="19" cy="4" r="1.4"/>',
   slot: '<rect x="3" y="8" width="18" height="8" rx="4"/>',
+  revolve: '<path class="s" d="M12 5c4 0 7 1.200 7 2.800v9c0 1.600-3 2.800-7 2.800z"/><path d="M12 5c4 0 7 1.200 7 2.800v9c0 1.600-3 2.800-7 2.800M12 10.500c4 0 7-1.200 7-2.700"/><path class="a" d="M12 2v20" stroke-dasharray="3 2"/><path class="a" d="M8.500 6.500C6 7 4.500 7.800 4.500 8.800M4.500 8.800l-.3-2.300M4.500 8.800l2.200-.6"/>',
+  extrude: '<path class="s" d="M4 21v-6l4-3h12v6l-4 3z"/><path d="M4 15l4-3h12l-4 3zM4 15v6h12v-6M16 21l4-3v-6"/><path class="a" d="M12 11V2.500M9.300 5.200L12 2.500l2.700 2.700"/>',
   project: '<path class="s" d="M3 21l4-8h14l-4 8z"/><path d="M3 21l4-8h14l-4 8z"/><path class="y" d="M8 4h9" stroke-width="2.4"/><path class="y" d="M8.500 17h8" stroke-width="2"/><path class="a" d="M9 6v9M16 6v9" stroke-dasharray="2 2"/>',
   constr: '<path d="M4 20L20 4" stroke-dasharray="3 3"/>',
   del: '<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v6M14 11v6"/>',
@@ -423,8 +425,8 @@ function solve(opts) {
 // ---------------------------------------------------------------- history / persistence
 const snapshot = () => JSON.stringify({ part, act: actId });
 function restore(s) {
-  const o = JSON.parse(s); part = o.part; const f = (feat(o.act) && feat(o.act).type === 'sketch') ? feat(o.act) : part.feats[0];
-  actId = f.id; S = f.sk; lastNid = S.nid; if (typeof closeFlPanel === 'function') closeFlPanel();
+  const o = JSON.parse(s); part = migrateSolid(o.part); const f = (feat(o.act) && feat(o.act).type === 'sketch') ? feat(o.act) : part.feats[0];
+  actId = f.id; S = f.sk; lastNid = S.nid; if (typeof closeFlPanel === 'function') closeFlPanel(); if (typeof exClose === 'function') exClose(true);
   sel = sel.filter(x => (x.k === 'p' ? S.pts : x.k === 'e' ? S.ents : x.k === 'd' ? S.dims : x.k === 'c' ? S.cons : S.pats)[x.id]); solve(); buildModel(); dirty3 = true;
 }
 function pushHist() { lastNid = S.nid; hist.length = hi + 1; hist.push(snapshot()); hi++; if (hist.length > 120) { hist.shift(); hi--; } persist(); }
@@ -444,7 +446,7 @@ function validSketch(o) { return o && typeof o === 'object' && o.pts && o.pts.p0
 function validPart(o) { return o && Array.isArray(o.feats) && o.feats.length && o.feats[0].type === 'sketch' && o.feats.every(f => f.type !== 'sketch' || validSketch(f.sk)); }
 function wrapSketch(sk) { const p = newPart(); p.name = sk.name && sk.name !== 'Sketch1' ? sk.name : 'Part1'; p.feats[0].sk = sk; return p; }
 function loadPart(p) {
-  part = p; actId = part.feats[0].id; S = part.feats[0].sk; lastNid = S.nid; sel = []; closePop(); tool = { name: 'select', step: 0 }; cur = null; hist.length = 0; hi = -1;
+  part = migrateSolid(p); actId = part.feats[0].id; S = part.feats[0].sk; lastNid = S.nid; sel = []; closePop(); tool = { name: 'select', step: 0 }; cur = null; hist.length = 0; hi = -1;
   gc(); solve(); regen(); pushHist(); $('#pname').value = part.name || 'Part1'; G3.fitNext = true;
   setMode(model && model.outer ? 'model' : 'sketch'); fit(); refresh();
 }
@@ -572,6 +574,7 @@ const HINTS = {
   slot: 'Slot: tap one end center, the other end center, then set the width.',
   project: 'Project: the dashed yellow lines are edges and holes of the part. Tap one to bring it into this sketch as reference geometry that follows the part. Tap Project again when done.',
   face: 'Face: tap inside the closed outline to turn it into sheet metal.',
+  expick: 'Tap inside the closed shape to use as the profile.',
   fillet: 'Fillet: tap a corner where two lines meet, then type the radius.',
   chamfer: 'Chamfer: tap a corner where two lines meet, then type the size.',
 };
@@ -820,7 +823,7 @@ function conTap(h) {
   refresh();
 }
 function escAll() {
-  closePop(); dimPlace = null; if (cutSel) cancelCut(); endFlPick(); endCrPick(); closeFlPanel(); finishPoly(); if (selFace) setSelFace(null);
+  closePop(); dimPlace = null; exPick = null; exClose(); if (cutSel) cancelCut(); endFlPick(); endCrPick(); closeFlPanel(); finishPoly(); if (selFace) setSelFace(null);
   tool = { name: 'select', step: 0 }; cur = null; sel = []; act = null; refresh(); if (mode === 'model') { G3.rebuild = true; dirty3 = true; }
 }
 function applyCon(type, fromTool) {
@@ -1510,7 +1513,7 @@ function drawOverlay(C) {
 }
 let bdActive = false;
 function loop() {
-  if (mode === 'model') { if (dirty3) { dirty3 = false; draw3D(); } }
+  if (mode === 'model') { if (bdActive) { bdActive = false; $('#stage').classList.remove('skbd'); } if (dirty3) { dirty3 = false; draw3D(); } }
   else if (dirty || (mode === 'sketch' && dirty3)) {
     if (mode === 'sketch') { const on = backdropOn() && drawBackdrop(); if (on !== bdActive) { bdActive = on; $('#stage').classList.toggle('skbd', on); } dirty3 = false; }
     else if (bdActive) { bdActive = false; $('#stage').classList.remove('skbd'); }
@@ -1534,12 +1537,22 @@ const RIBBON_SM = [
   ['View', [['view', '3D / Sketch']]],
   ['Flat Pattern', [['flat', 'Flat Pattern'], ['flatdxf', 'Flat DXF']]],
 ];
+const RIBBON_3D = [
+  ['Sketch', [['newsk', 'Start 2D Sketch']]],
+  ['Create', [['extrude', 'Extrude'], ['revolve', 'Revolve']]],
+  ['View', [['view', '3D / Sketch']]],
+];
+const SM_ONLY = new Set(['face', 'flange', 'contour', 'thick', 'flat', 'flatdxf', 'cut', 'cround', 'cchamfer']);
 const SMALL = new Set(['poly', 'slot', 'fillet', 'chamfer', 'constr', 'del', 'pcirc', 'prect']);   // secondary tools: small stacked buttons, Inventor style
 const TOOLS = ['line', 'poly', 'rect', 'circle', 'arc', 'slot', 'select', 'fillet', 'chamfer'];
 function ribbonClick(k) {
   if (cutSel && k !== 'cut' && k !== 'view' && k !== 'finish') cancelCut();
   if (flPick && k !== 'flange' && k !== 'view' && k !== 'finish') endFlPick();
   if (crPick && k !== 'cround' && k !== 'cchamfer' && k !== 'view' && k !== 'finish') endCrPick();
+  if (part.solid && SM_ONLY.has(k)) { toast('This part is a solid (Extrude) — that is a sheet metal tool. Sheet metal parts start with Face.'); return; }
+  if (exActive && k !== 'view') exClose();
+  if (exPick && k !== 'extrude' && k !== 'revolve' && k !== 'view') exPick = null;
+  if (k === 'extrude' || k === 'revolve') { extrudeButton(k); return; }
   if (k === 'select') { if (tool.dim) setTool('select'); else setTool('select', true); }
   else if (TOOLS.includes(k)) { if (tool.name === k) setTool('select'); else setTool(k); }
   else if (k === 'constr') toggleConstr();
@@ -1558,7 +1571,7 @@ function ribbonClick(k) {
   else if (k === 'cround') cornerButton('round');
   else if (k === 'cchamfer') cornerButton('chamfer');
   else if (k === 'thick') { if (faceFeat()) thicknessDialog(t => { part.t = t.v; part.tl = t.label; commitPart(); }); else toast('Create a Face first — thickness is chosen then'); }
-  else if (k === 'finish') { finishPoly(); closePop(); tool = { name: 'select', step: 0 }; sel = []; if (model && model.outer) setMode('model'); else { ribTab = 'sm'; buildRibbon(); refresh(); toast('Sketch finished — tap Face for a closed outline, or Contour Flange for an open profile'); } }
+  else if (k === 'finish') { finishPoly(); closePop(); tool = { name: 'select', step: 0 }; sel = []; if (model && model.outer) setMode('model'); else { if (ribTab === 'sketch') ribTab = 'sm'; buildRibbon(); refresh(); toast('Sketch finished — Sheet Metal tab: Face (or Contour Flange). 3D Model tab: Extrude for a solid part.'); } }
   else if (k === 'view') { if (mode === 'model') setMode('sketch'); else if (mode === 'flat') setMode('model'); else if (model && model.outer) setMode('model'); else toast(faceFeat() ? (model && model.err) || 'The outline is not closed' : 'No sheet metal yet — open the Sheet Metal tab, tap Face, then tap inside your outline'); }
   else if (tool.name === 'con' && tool.type === k) setTool('select');
   else applyCon(k);
@@ -1584,8 +1597,8 @@ function varBtn(k, lbl, grid) {
 }
 function buildRibbon() {
   const R = $('#ribbon'); R.innerHTML = '';
-  for (const [name, btns0, grid] of (ribTab === 'sm' ? RIBBON_SM : RIBBON)) {
-    const btns = name === 'Output' && model && model.outer ? [...btns0, ['flatdxf', 'Flat DXF']] : btns0;
+  for (const [name, btns0, grid] of (ribTab === 'sm' ? RIBBON_SM : ribTab === '3d' ? RIBBON_3D : RIBBON)) {
+    const btns = name === 'Output' && model && model.outer && !part.solid ? [...btns0, ['flatdxf', 'Flat DXF']] : btns0;
     const big = btns.filter(b => grid || !SMALL.has(b[0])), small = grid ? [] : btns.filter(b => SMALL.has(b[0]));
     R.append(el('div', { class: 'grp' }, el('div', { class: 'btns' }, grid ? el('div', { class: 'grid' }, big.map(([k, lbl]) => varBtn(k, lbl, true))) : big.map(([k, lbl]) => varBtn(k, lbl, false)),
       small.length ? el('div', { class: 'stack' }, small.map(([k, lbl]) => varBtn(k, lbl, false))) : null), el('div', { class: 'gl' }, name)));
@@ -1622,8 +1635,8 @@ function buildBrowser() {
   B.append(el('div', { class: 'root' }, el('span', { class: 'tg' }, 'P'), part.name || 'Part1'));
   for (const f of part.feats) {
     const on = f.type === 'sketch' && f.id === actId && mode === 'sketch';
-    const val = f.type === 'face' || f.type === 'contour' ? (part.tl || '') : f.type === 'cut' || f.type === 'flange' || f.type === 'corner' ? (f.off ? 'off' : f.type === 'flange' ? (f.ang == null ? 90 : f.ang) + '°' : f.type === 'corner' ? (f.kind === 'chamfer' ? 'chamfer ' : 'R') + fmt(f.size) : '') : on ? 'editing' : '';
-    B.append(el('div', { class: 'row' + (on ? ' on' : ''), onclick: () => { closeDrawer(); featTap(f); } }, el('span', { class: 'tg' }, f.type === 'sketch' ? '✎' : f.type === 'face' ? '▱' : f.type === 'flange' ? '⌐' : f.type === 'contour' ? '⎍' : f.type === 'corner' ? '◜' : '◍'), el('span', { class: 'nm' }, f.name), el('span', { class: 'vl' }, val),
+    const val = f.type === 'extrude' ? (f.off ? 'off' : f.thru ? 'through' : fmt(Math.abs(f.d)) + ' in') : f.type === 'revolve' ? (f.off ? 'off' : fmt(f.ang || 360) + '°') : f.type === 'face' || f.type === 'contour' ? (part.tl || '') : f.type === 'cut' || f.type === 'flange' || f.type === 'corner' ? (f.off ? 'off' : f.type === 'flange' ? (f.ang == null ? 90 : f.ang) + '°' : f.type === 'corner' ? (f.kind === 'chamfer' ? 'chamfer ' : 'R') + fmt(f.size) : '') : on ? 'editing' : '';
+    B.append(el('div', { class: 'row' + (on ? ' on' : ''), onclick: () => { closeDrawer(); featTap(f); } }, el('span', { class: 'tg' }, f.type === 'sketch' ? '✎' : f.type === 'extrude' ? '⬒' : f.type === 'revolve' ? '◐' : f.type === 'face' ? '▱' : f.type === 'flange' ? '⌐' : f.type === 'contour' ? '⎍' : f.type === 'corner' ? '◜' : '◍'), el('span', { class: 'nm' }, f.name), el('span', { class: 'vl' }, val),
       f.type === 'sketch' ? el('button', { class: 'x eye' + (sketchVis(f) ? ' on' : ''), title: sketchVis(f) ? 'Hide sketch' : 'Show sketch', 'aria-label': (sketchVis(f) ? 'Hide ' : 'Show ') + f.name, html: icon(sketchVis(f) ? 'eye' : 'eyeoff'), onclick: ev => { ev.stopPropagation(); f.vis = !sketchVis(f); commitPart(); } }) : null));
   }
   if (model && model.warn && model.warn.length) B.append(el('div', { class: 'sub', style: 'color:var(--danger);padding-top:6px' }, model.warn.join(' · ')));
@@ -1784,7 +1797,6 @@ $('#fileIn').onchange = async e => {
 $('#pname').addEventListener('change', e => { part.name = e.target.value.trim() || 'Part1'; e.target.value = part.name; pushHist(); refresh(); });
 $('#pname').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
 document.querySelectorAll('.tab[data-soon]').forEach(t => t.onclick = () => toast(t.dataset.soon));
-document.querySelectorAll('.tab[data-model]').forEach(t => t.onclick = () => { if (model && model.outer && !model.contour) setMode('model'); else toast('Make a Face first — then 3D Model shows the part'); });
 document.querySelectorAll('.tab[data-tab]').forEach(t => t.onclick = () => { if (t.dataset.tab === 'sketch' && mode === 'model') { setMode('sketch'); return; } finishPoly(); ribTab = t.dataset.tab; buildRibbon(); refresh(); });
 window.addEventListener('resize', resize);
 if (window.ResizeObserver) new ResizeObserver(resize).observe($('#stage'));

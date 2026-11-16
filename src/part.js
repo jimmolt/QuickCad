@@ -151,6 +151,7 @@ const topLoops = loops => loops.filter(l => !loops.some(o => o !== l && o.area >
 
 // ---------------------------------------------------------------- model = outline minus cutouts
 function buildModel() {
+  if (part.solid) { buildSolid(); return; }
   model = null;
   const cf = contourFeat(); if (cf && !faceFeat()) { buildContour(cf); return; }
   const face = faceFeat(); if (!face || !part.t) return;
@@ -582,7 +583,7 @@ function syncProj(srcFeat) {       // operates on S
 }
 // Bring every later sketch in line with the outline, then rebuild the model.
 const skFl = f => f && f.plane && f.plane.fl;                       // id of the flange a sketch sits on
-const planeKey = f => skFl(f) ? 'fl' + f.plane.fl : 'base';
+const planeKey = f => skFl(f) ? 'fl' + f.plane.fl : f && f.pl ? 'pl' + f.id : 'base';
 function syncFlProj(W, L) {       // operates on S: the flange's flat leg as a fixed yellow rectangle (origin = bend end, start side)
   const C = [[0, 0], [W, 0], [W, L], [0, L]], ids = [];
   for (let k = 0; k < 4; k++) { let id = Object.keys(S.pts).find(q => S.pts[q].proj && S.pts[q].proj[0] === '@fl' && S.pts[q].proj[1] === k);
@@ -591,6 +592,7 @@ function syncFlProj(W, L) {       // operates on S: the flange's flat leg as a f
   for (let k = 0; k < 4; k++) if (!Object.values(S.ents).some(e => e.proj && e.proj[0] === '@fl' && e.proj[1] === k)) S.ents[nid('e')] = { t: 'line', a: ids[k], b: ids[(k + 1) % 4], con: true, proj: ['@fl', k] };
 }
 function regen() {
+  if (part.solid) { buildSolid(); regenPG(); dirty3 = true; G3.rebuild = true; return; }
   const face = faceFeat(), src = face && feat(face.sk);
   if (src) for (const f of part.feats) if (f.type === 'sketch' && f.id !== src.id && !skFl(f)) withSketch(f.sk, () => { syncProj(src); gc(); solve(); if (f.id === actId) lastNid = S.nid; });
   if (src && actId !== src.id) { lastNid = S.nid; solve(); }
@@ -606,9 +608,9 @@ function regen() {
 const nextName = (type, base) => base + (part.feats.filter(f => f.type === type).length + 1);
 function activate(id) { finishPoly(); closePop(); sel = []; actId = id; S = feat(id).sk; lastNid = S.nid; tool = { name: 'select', step: 0 }; cur = null; solve(); }
 function setMode(m) {
-  finishPoly(); closePop(); sel = [];
+  finishPoly(); closePop(); sel = []; if (m !== 'model') { exClose(true); if (m !== 'sketch' || tool.name !== 'face') exPick = null; }
   if (m === 'model') { init3D(); if (!G3.ok) { toast('3D view is not available in this browser — the flat pattern still works'); } }
-  mode = m; ribTab = m === 'model' || m === 'flat' ? 'sm' : 'sketch'; if ((m === 'sketch' && tool.name === 'face') || (m !== 'sketch' && tool.name === 'project')) tool = { name: 'select', step: 0 };
+  mode = m; ribTab = m === 'model' || m === 'flat' ? (part.solid ? '3d' : 'sm') : 'sketch'; if ((m === 'sketch' && tool.name === 'face') || (m !== 'sketch' && tool.name === 'project')) tool = { name: 'select', step: 0 };
   $('#stage').classList.toggle('model', m === 'model'); $('#stage').classList.toggle('flat', m === 'flat');
   buildRibbon(); resize(); if (m === 'sketch') fit(); if (m === 'flat') fitFlat(); dirty3 = true; refresh(); updateInfo();
 }
@@ -621,6 +623,7 @@ function faceButton() {
 function facePick(w) {
   const { loops } = findLoops(exportGeoms());
   const hit = loops.filter(l => pointInPoly(w.x, w.y, l.poly));
+  if (tool.ex) { exPick2D(w); return; }
   if (!hit.length) { toast(loops.length ? 'Tap inside the outline' : 'No closed outline yet — close the shape first (snap the last point to the first)'); return; }
   thicknessDialog(t => {
     part.t = t.v; part.tl = t.label; part.feats.push({ id: 'f' + (part.nf++), type: 'face', name: 'Face1', sk: actId, pt: { x: w.x, y: w.y } }); feat(actId).vis = false;
@@ -644,6 +647,7 @@ function hit3(px, py) {            // what is under the finger in 3D: { plate, f
 }
 const selKey = v => !v ? '' : v.fl ? 'fl' + v.fl : v;
 function facePick3(px, py) {
+  if (part.solid) { solidTap(px, py); return; }
   if (!(model && model.outer && !model.contour)) return; const h = hit3(px, py);
   const v = h && h.fl ? { fl: h.fl.f.id } : h && h.plate && h.face ? h.face : null;
   if (!v) { if (selFace) setSelFace(null); return; }
@@ -651,6 +655,7 @@ function facePick3(px, py) {
   setSelFace(v); toast((v.fl ? feat(v.fl).name + ' face' : v === 'top' ? 'Top face' : 'Bottom face') + ' selected — tap New Sketch');
 }
 function newSketchOnFace() {
+  if (part.solid) { solidNewSketch(); return; }
   const face = faceFeat(); if (!face) { toast('Create a Face first — then New Sketch puts a sketch on it'); return; }
   if (mode === 'model' && !selFace) { toast('Tap the face you want to sketch on (it turns orange), then tap New Sketch'); return; }
   const f = { id: 'f' + (part.nf++), type: 'sketch', name: nextName('sketch', 'Sketch'), sk: newSketch() }; if (selFace === 'bot') f.plane = 'bot'; else if (selFace && selFace.fl) f.plane = { fl: selFace.fl };
@@ -659,7 +664,7 @@ function newSketchOnFace() {
   const fr = typeof planeFrame === 'function' && planeFrame(f);
   if (fr && mode === 'model') swingTo(fr, done); else done();
 }
-const sketchUsed = f => part.feats.some(x => (x.type === 'face' || x.type === 'cut' || x.type === 'contour') && x.sk === f.id);
+const sketchUsed = f => part.feats.some(x => (x.type === 'extrude' || x.type === 'revolve' || x.type === 'face' || x.type === 'cut' || x.type === 'contour') && x.sk === f.id);
 const sketchVis = f => f.vis !== undefined ? f.vis : !sketchUsed(f);      // shown until a feature uses it, unless toggled
 function sketchGeoms(f) { return toModelGs(f.sk, withSketch(f.sk, () => { const out = []; for (const id in S.ents) { const e = S.ents[id]; if (!e.con && !e.proj) out.push(entG(e)); } for (const id in S.pats) out.push(...patGeoms(S.pats[id], false)); return out; })); }
 // Cut = pick the closed shapes to remove, then Apply. Works from the sketch view or the 3D view.
@@ -699,6 +704,7 @@ function makeCut() {
   if (model && model.warn.length) toast(model.warn[model.warn.length - 1]); else toast('Cut ' + n + ' shape' + (n === 1 ? '' : 's') + ' from ' + names.join(', '));
 }
 function featTap(f) {
+  if (f.type === 'extrude' || f.type === 'revolve') { if (mode !== 'model') setMode('model'); exPanel(f); return; }
   if (f.type === 'sketch') { activate(f.id); setMode('sketch'); return; }
   if (f.type === 'face') { faceButton(); return; }
   if (f.type === 'flange') { if (mode !== 'model') setMode('model'); flangePanel(f); return; }
@@ -736,6 +742,7 @@ function updateInfo() {
   const n = $('#minfo'); if (!n) return;
   if (!(model && model.outer)) { n.innerHTML = model && model.err ? model.err : ''; n.style.visibility = model && model.err ? 'visible' : 'hidden'; return; }
   n.style.visibility = 'visible'; const b = model.bb;
+  if (part.solid) { solidInfo(n); return; }
   n.innerHTML = `<b>${part.tl}</b> mild steel · blank <b>${fmt(b.x1 - b.x0)} × ${fmt(b.y1 - b.y0)}</b> in · ${model.holes.length} cutout${model.holes.length === 1 ? '' : 's'}${model.flanges && model.flanges.length ? ' · ' + model.flanges.length + ' flange' + (model.flanges.length === 1 ? '' : 's') : ''} · about ${fmt((model.area * part.t * 0.2836).toFixed(2))} lb`
     + (model.warn.length ? `<br><span style="color:var(--danger)">${model.warn.join('<br>')}</span>` : '');
 }
@@ -766,7 +773,7 @@ function init3D() {
       else if (q.pan) pan(dx, dy);
       else { G3.az -= dx * 0.009; G3.el = Math.max(-1.5533, Math.min(1.5533, G3.el + dy * 0.009)); }
       dirty3 = true; });
-    const up = e => { const q = ps.get(e.pointerId); if (q && q.hd) { handleEnd(q.hd); ps.delete(e.pointerId); if (ps.size < 2) pinch = null; return; } if (q && e.type === 'pointerup' && !q.moved && !q.multi && ps.size === 1) { if (cutSel) { const h = hit3(q.x, q.y); if (h && h.fl) cutTap({ x: h.x, y: h.y }, 'fl' + h.fl.f.id); else { const w = h && h.plate ? h : screenToTop(q.x, q.y); if (w) cutTap({ x: w.x, y: w.y }, 'base'); } } else if (flPick) { const h = pickFlangeEdge3(q.x, q.y); if (h) flangeHit(h); else { endFlPick(); facePick3(q.x, q.y); } } else if (crPick) { const h = nearestCorner(q.x, q.y, 40); if (h) cornerHit(h.v); else { endCrPick(); facePick3(q.x, q.y); } } else { const now = Date.now(), dbl = lastFaceTap && now - lastFaceTap.t < 450 && Math.hypot(q.x - lastFaceTap.x, q.y - lastFaceTap.y) < 24; lastFaceTap = { t: now, x: q.x, y: q.y }; if (dbl && selFace) { lastFaceTap = null; newSketchOnFace(); } else facePick3(q.x, q.y); } } ps.delete(e.pointerId); if (ps.size < 2) pinch = null; };
+    const up = e => { const q = ps.get(e.pointerId); if (q && q.hd) { handleEnd(q.hd); ps.delete(e.pointerId); if (ps.size < 2) pinch = null; return; } if (q && e.type === 'pointerup' && !q.moved && !q.multi && ps.size === 1) { if (part.solid || exPick) { solidTap(q.x, q.y); } else if (cutSel) { const h = hit3(q.x, q.y); if (h && h.fl) cutTap({ x: h.x, y: h.y }, 'fl' + h.fl.f.id); else { const w = h && h.plate ? h : screenToTop(q.x, q.y); if (w) cutTap({ x: w.x, y: w.y }, 'base'); } } else if (flPick) { const h = pickFlangeEdge3(q.x, q.y); if (h) flangeHit(h); else { endFlPick(); facePick3(q.x, q.y); } } else if (crPick) { const h = nearestCorner(q.x, q.y, 40); if (h) cornerHit(h.v); else { endCrPick(); facePick3(q.x, q.y); } } else { const now = Date.now(), dbl = lastFaceTap && now - lastFaceTap.t < 450 && Math.hypot(q.x - lastFaceTap.x, q.y - lastFaceTap.y) < 24; lastFaceTap = { t: now, x: q.x, y: q.y }; if (dbl && selFace) { lastFaceTap = null; newSketchOnFace(); } else facePick3(q.x, q.y); } if (part.solid && !exPick && !exActive) { const now = Date.now(), dbl = lastFaceTap && now - lastFaceTap.t < 450 && Math.hypot(q.x - lastFaceTap.x, q.y - lastFaceTap.y) < 24; lastFaceTap = dbl ? null : { t: now, x: q.x, y: q.y }; if (dbl && selFace) newSketchOnFace(); } } ps.delete(e.pointerId); if (ps.size < 2) pinch = null; };
     c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
     c.addEventListener('pointermove', e => { if (crPick && !ps.size && e.pointerType !== 'touch') { const p = pos(e), h = nearestCorner(p.x, p.y, 40), k = h ? KEY(h.v.x, h.v.y) : null; if (k !== crHover) { crHover = k; G3.rebuild = true; dirty3 = true; } return; }
       if (!flPick || ps.size || e.pointerType === 'touch') return; const p = pos(e), h = pickFlangeEdge3(p.x, p.y), key = h ? h.key : null; if (key !== (flHover ? flHover.key : null)) { flHover = h ? { key, line: h.line } : null; G3.rebuild = true; dirty3 = true; } });
@@ -800,6 +807,7 @@ function rebuild3D() {
   const T = window.THREE; G3.rebuild = false;
   while (G3.grp.children.length) { const o = G3.grp.children.pop(); o.geometry.dispose(); o.material.dispose(); }
   if (!(model && model.outer)) return;
+  if (model.solid) { rebuildSolid3D(T); return; }
   const v2 = poly => poly.map(p => new T.Vector2(p[0], p[1]));
   const shape = new T.Shape(v2(model.contour ? model.contour.poly : model.outer.poly)); if (!model.contour) for (const h of model.holes) shape.holes.push(new T.Path(v2(h.poly)));
   const geo = new T.ExtrudeGeometry(shape, { depth: model.contour ? model.contour.len : part.t, bevelEnabled: false, curveSegments: 1 });
@@ -861,7 +869,7 @@ function rebuild3D() {
 // Every 3D edge of the part (both faces of the plate and of each flange leg, and the holes in them) gets a stable key. The Project tool drops an edge
 // onto the active sketch plane as fixed yellow reference geometry tagged proj:['@pg', key]; regen re-projects it so it follows the part.
 function projCatalog() {
-  const out = []; if (!(model && model.outer) || model.contour) return out; const t = part.t;
+  const out = []; if (!(model && model.outer) || model.contour) return out; if (model.solid) return model.cat; const t = part.t;
   const add = (g, key, map, n) => { for (const h of [1, 0]) { const k = key + (h ? 't' : 'b');
     if (g.t === 'line') { out.push({ key: k, t: 'line', A: map(g.x1, g.y1, h), B: map(g.x2, g.y2, h) }); continue; }
     if (!(g.r > 1e-6)) continue; const o = { key: k, t: g.t, C: map(g.cx, g.cy, h), r: g.r, n };
@@ -896,7 +904,7 @@ function gSig(g) {
   if (g.t === 'circle') return 'c' + pt(g.cx, g.cy) + '|' + r(g.r);
   return 'a' + pt(g.cx, g.cy) + '|' + pt(g.cx + g.r * Math.cos(g.sa), g.cy + g.r * Math.sin(g.sa)) + '|' + pt(g.cx + g.r * Math.cos(g.ea), g.cy + g.r * Math.sin(g.ea));
 }
-const projOk = () => { const face = faceFeat(); return !!(model && model.outer && !model.contour && face && face.sk !== actId && planeFrame(feat(actId))); };
+const projOk = () => { const face = faceFeat(); if (part.solid) return !!(model && model.solid); return !!(model && model.outer && !model.contour && face && face.sk !== actId && planeFrame(feat(actId))); };
 function projCands() {            // what the Project tool can still bring into the active sketch
   if (!projOk()) return []; const fr = planeFrame(feat(actId)), seen = new Set(), out = [];
   for (const id in S.ents) seen.add(gSig(entG(S.ents[id])));
@@ -951,6 +959,7 @@ function projectTap(sx, sy) {
 }
 // ---- world frame of a sketch feature's plane: origin, x/y directions, outward normal (toward whoever views that sketch)
 function planeFrame(f) {
+  if (part.solid) return f && f.type === 'sketch' ? skFrame(f) : null;
   if (!f || !(model && model.outer) || model.contour) return null;
   const id = skFl(f);
   if (!id) return f.plane === 'bot' ? { O: [0, 0, 0], ex: [-1, 0, 0], ey: [0, 1, 0], n: [0, 0, -1] } : { O: [0, 0, part.t], ex: [1, 0, 0], ey: [0, 1, 0], n: [0, 0, 1] };
@@ -995,7 +1004,8 @@ function draw3D() {
   if (!G3.ok) return;
   G3.cam.up.set(0, 0, 1); G3.sun.intensity = 0.75;
   if (G3.rebuild || G3.theme !== settings.theme) { G3.theme = settings.theme; rebuild3D(); }
-  if (G3.fitNext && model && model.outer) { const b = model.contour ? model.contour.bb : model.bb, zh = model.contour ? model.contour.len : part.t; G3.fitNext = false; G3.tx = (b.x0 + b.x1) / 2; G3.ty = (b.y0 + b.y1) / 2; G3.tz = zh / 2; const d = hyp(b.x1 - b.x0, b.y1 - b.y0, zh); G3.span = Math.max(0.2, d * 1.25 * Math.max(1, CH / Math.max(CW, 1))); }
+  if (G3.fitNext && model && model.solid && !model.empty) { const m = model.b3; G3.fitNext = false; G3.tx = (m.min[0] + m.max[0]) / 2; G3.ty = (m.min[1] + m.max[1]) / 2; G3.tz = (m.min[2] + m.max[2]) / 2; G3.span = Math.max(0.2, hyp(m.max[0] - m.min[0], m.max[1] - m.min[1], m.max[2] - m.min[2]) * 1.25 * Math.max(1, CH / Math.max(CW, 1))); }
+  if (G3.fitNext && model && model.outer && !model.solid) { const b = model.contour ? model.contour.bb : model.bb, zh = model.contour ? model.contour.len : part.t; G3.fitNext = false; G3.tx = (b.x0 + b.x1) / 2; G3.ty = (b.y0 + b.y1) / 2; G3.tz = zh / 2; const d = hyp(b.x1 - b.x0, b.y1 - b.y0, zh); G3.span = Math.max(0.2, d * 1.25 * Math.max(1, CH / Math.max(CW, 1))); }
   G3.r.setPixelRatio(DPR); G3.r.setSize(CW, CH, false);
   const cam = G3.cam, hh = G3.span / 2, hw = hh * CW / Math.max(CH, 1), ce = Math.cos(G3.el);
   cam.left = -hw; cam.right = hw; cam.top = hh; cam.bottom = -hh; cam.updateProjectionMatrix();

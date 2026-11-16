@@ -96,6 +96,11 @@ svg .a{stroke:var(--ia)} svg .y{fill:var(--iy);stroke:none} svg .s{fill:currentC
 #cutbar button{background:var(--panel2);border:1px solid var(--line);color:var(--text)}
 #cutbar button.pri{background:#ff9f1c;border-color:#ff9f1c;color:#14181d;font-weight:600}
 #cutbar button:disabled{opacity:.4}
+#exbar{position:absolute;left:50%;bottom:56px;transform:translateX(-50%);display:flex;gap:8px;align-items:center;background:var(--panel,#222);color:var(--text);border:1px solid var(--line,#444);border-radius:12px;padding:6px 8px 6px 14px;box-shadow:0 4px 18px rgba(0,0,0,.35);z-index:30;font-size:14px;max-width:96%;flex-wrap:wrap}
+#exbar button{min-height:40px;padding:0 12px;border-radius:9px;background:var(--panel2);border:1px solid var(--line);color:var(--text)}
+#exbar button.pri,#exbar button.on{background:#ff9f1c;border-color:#ff9f1c;color:#14181d;font-weight:600}
+#exbar input{width:84px;min-height:40px;border-radius:9px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-size:16px;padding:0 8px;text-align:right}
+#exbar .nm{font-weight:600}
 #flpanel{position:absolute;right:112px;top:58px;width:292px;max-width:calc(100% - 24px);background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:14px;padding:10px 12px 12px;box-shadow:0 6px 24px rgba(0,0,0,.4);z-index:31;font-size:14px}
 #flpanel .hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:16px}
 #flpanel .x{width:34px;height:34px;border-radius:8px;background:transparent;color:var(--dim)}
@@ -196,7 +201,7 @@ svg .a{stroke:var(--ia)} svg .y{fill:var(--iy);stroke:none} svg .s{fill:currentC
   <nav id="tabs">
     <button class="tab on" data-tab="sketch">Sketch</button>
     <button class="tab" data-tab="sm">Sheet Metal</button>
-    <button class="tab" data-model="1">3D Model</button>
+    <button class="tab" data-tab="3d">3D Model</button>
   </nav>
   <div id="ribbon"></div>
   <div id="main">
@@ -219,6 +224,8 @@ svg .a{stroke:var(--ia)} svg .y{fill:var(--iy);stroke:none} svg .s{fill:currentC
 <script>/*__THREE__*/</script>
 <script>/*__SOLVER__*/</script>
 <script>var WASM_B64="__WASM__";</script>
+<script>/*__MANIFOLD__*/</script>
+<script>var MF_B64="__MFWASM__";</script>
 <script>
 /*__APP__*/
 </script>
