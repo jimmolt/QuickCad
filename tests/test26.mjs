@@ -1,0 +1,31 @@
+import { createRequire } from 'node:module';
+const require = createRequire('/opt/npm-tools/node_modules/');
+const { chromium } = require('playwright');
+const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox', '--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const page = await browser.newPage({ viewport: { width: 1180, height: 820 }, deviceScaleFactor: 1 });
+const errs = []; page.on('pageerror', e => errs.push('PAGEERR ' + e.message));
+await page.goto('file:///home/claude/qc/dist/index.html'); await page.waitForFunction(() => window.QC && QC.solver === 'ok');
+let box = await page.locator('#cv').boundingBox();
+const W = async (x, y) => { const [sx, sy] = await page.evaluate(([x, y]) => QC.w2s(x, y), [x, y]); return [box.x + sx, box.y + sy]; };
+const drag = async (x1, y1, x2, y2) => { const a = await W(x1, y1), b = await W(x2, y2); await page.mouse.move(...a); await page.mouse.down(); await page.mouse.move(...b, { steps: 6 }); await page.mouse.up(); };
+const tap = async (x, y) => { const a = await W(x, y); await page.mouse.move(...a); await page.mouse.down(); await page.mouse.up(); await page.waitForTimeout(80); };
+const rb = t => page.click(`#ribbon [data-k="${t}"]`);
+const key = k => page.evaluate(k => QC.popKey(k), k);
+const len = () => page.evaluate(() => { const E = QC.S.ents, l = Object.values(E).find(e => e.t === 'line' && !e.con && !e.proj); const a = QC.S.pts[l.a], b = QC.S.pts[l.b]; return +Math.hypot(a.x - b.x, a.y - b.y).toFixed(4); });
+const hist = () => page.evaluate(() => QC.hi);
+// rect 4 x 2; dimension the bottom line, type 7 then 5 -> preview 7 then 75? no: 7 then .5 => "7.5"... use keys '7','.','5'
+await rb('rect'); await drag(0, 0, 4, 2); await page.click('#escBtn');
+await rb('select'); await tap(1.2, 0); await page.waitForTimeout(150);
+console.log('popup open', await page.evaluate(() => !!document.querySelector('#pop.on')), 'len', await len(), 'hi', await hist());
+await key('7'); await page.waitForTimeout(100); console.log('after key 7: len', await len(), 'hi', await hist());
+await key('.'); await key('5'); await page.waitForTimeout(100); console.log('after 7.5: len', await len());
+await key('⌫'); await key('⌫'); await page.waitForTimeout(100); console.log('after backspaces (7): len', await len());
+await key('✓'); await page.waitForTimeout(150); console.log('after OK: len', await len(), 'hi', await hist(), 'dims', await page.evaluate(() => Object.values(QC.S.dims).map(d => d.t + ':' + d.v).join(' ')));
+await page.evaluate(() => QC.undo()); await page.waitForTimeout(100); console.log('after undo: len', await len(), 'dims', await page.evaluate(() => Object.keys(QC.S.dims).length));
+// cancel path: type a value then close with X -> stays at committed 7
+await page.evaluate(() => QC.redo()); await page.waitForTimeout(100);
+await rb('select'); await tap(1.2, 0); await page.waitForTimeout(150);
+console.log('popup2', await page.evaluate(() => !!document.querySelector('#pop.on')));
+await key('9'); await page.waitForTimeout(100); console.log('preview 9: len', await len());
+await page.click('#pop .x'); await page.waitForTimeout(100); console.log('after cancel: len', await len(), 'hi', await hist());
+console.log(errs.join('\n') || 'no page errors'); await browser.close();
